@@ -1,26 +1,9 @@
-type Biome = "desert" | "plains" | "forest" | "mountains";
-type CreatedHexes = {
-  desert: number;
-  mountains: number;
-  plains: number;
-  forest: number;
-};
+import { Biome, BIOME_COLOR, HEX_SIZE } from "./map_data";
+import { Hex } from "@/app/_trpc/client";
+import { Nation } from "@/app/_trpc/client";
 
-export type Hex = {
-  id: number;
-  biome: Biome | null;
-  q: number;
-  r: number;
-};
-const BIOMES: Biome[] = ["desert", "plains", "forest", "mountains"];
-const BIOME_COLOR = {
-  desert: "#CCAD60",
-  plains: "#91BD59",
-  forest: "#2E6F40",
-  mountains: "#9E825A",
-};
+const biomePatterns: Partial<Record<Biome, CanvasPattern>> = {};
 
-export const biomePatterns: Partial<Record<Biome, CanvasPattern>> = {};
 export function initBiomePatterns(ctx: CanvasRenderingContext2D): Promise<void> {
   return new Promise((resolve) => {
     const images: Record<Biome, HTMLImageElement> = {
@@ -54,42 +37,24 @@ export function initBiomePatterns(ctx: CanvasRenderingContext2D): Promise<void> 
   });
 }
 
-const BIOME_MOD = {
-  desert: 0.6,
-  mountains: 0.5,
-  forest: 0.7,
-  plains: 1,
-};
-
-const HEX_DIRECTIONS = [
-  { dq: +1, dr: 0 },
-  { dq: +1, dr: -1 },
-  { dq: 0, dr: -1 },
-  { dq: -1, dr: 0 },
-  { dq: -1, dr: +1 },
-  { dq: 0, dr: +1 },
-];
-
-const mapHexes = generateHexMap(9);
-const HEX_SIZE = 40;
 function drawPolygon({
   ctx,
   centerX,
   centerY,
-  sides,
   radius,
   rotation,
   biome,
-  isSelected,
+  id,
+  nations,
 }: {
   ctx: CanvasRenderingContext2D;
   centerX: number;
   centerY: number;
-  sides: number;
   radius: number;
   rotation: number;
   biome: Biome | null;
-  isSelected: boolean;
+  id: number;
+  nations: Nation[];
 }) {
   ctx.save();
 
@@ -116,120 +81,99 @@ function drawPolygon({
 
   Object.keys(BIOME_COLOR).forEach((key) => {
     if (key === biome) {
-      ctx.fillStyle = biomePatterns[biome]!;
-      ctx.strokeStyle = isSelected ? "#FFFFFF" : BIOME_COLOR[key];
+      ctx.fillStyle = biomePatterns[biome as Biome]!;
+      ctx.strokeStyle = BIOME_COLOR[key];
     }
   });
 
   ctx.fill();
   ctx.stroke();
+
+  nations.map((nation) => {
+    nation.tiles.map((tile: number) => {
+      if (tile === id) {
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = nation.color;
+        ctx.fill();
+
+        // set provinces that are controlled by no one to be specific color (like black)
+      }
+    });
+  });
+  ctx.globalAlpha = 1;
+
   ctx.restore();
 }
-function generateHexMap(radius: number) {
-  const hexes: Hex[] = [];
-  let id = 0;
 
-  for (let q = -radius; q <= radius; q++) {
-    for (let r = -radius; r <= radius; r++) {
-      const s = -q - r;
+// draw invisible polygons for clicking
+function drawClickPolygon({
+  ctx,
+  centerX,
+  centerY,
+  radius,
+  rotation,
+  isSelected,
+  blinkTime,
+}: {
+  ctx: CanvasRenderingContext2D;
+  centerX: number;
+  centerY: number;
+  radius: number;
+  rotation: number;
+  isSelected: boolean;
+  blinkTime: number;
+}) {
+  ctx.save();
 
-      if (Math.abs(s) <= radius) {
-        hexes.push({ id: id++, q, r, biome: null });
-      }
+  // 1️⃣ переносим (0,0) в центр хекса
+  ctx.translate(centerX, centerY);
+
+  // 2️⃣ рисуем хекс ВОКРУГ (0,0)
+  ctx.beginPath();
+
+  for (let i = 0; i < 6; i++) {
+    const angle = ((Math.PI * 2) / 6) * i + rotation;
+    const x = radius * Math.cos(angle);
+    const y = radius * Math.sin(angle);
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
     }
   }
 
-  // Assign Biomes
-  const availableHexes = [...hexes]; // objects in avalableHexes only refer to actual
-  // hexes rather than making a new copy.
-  const addedHexes: CreatedHexes = {
-    desert: 0,
-    mountains: 0,
-    plains: 0,
-    forest: 0,
-  };
-  for (const biome of BIOMES) {
-    while (Math.random() < 1 / (1 + addedHexes[biome])) {
-      const randomIndex = Math.floor(Math.random() * availableHexes.length);
-      const hex = availableHexes.splice(randomIndex, 1)[0];
-      hex.biome = biome;
-      addedHexes[biome] += 1;
-    }
+  ctx.closePath();
+
+  ctx.lineWidth = 3;
+
+  if (!isSelected) {
+    ctx.restore();
+    return;
   }
 
-  // wave 2: generate natural structure for most tiles
-  const queue = hexes.filter((h) => h.biome !== null);
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const neighbors = findNeighbors(current, hexes);
-    for (const n of neighbors) {
-      if (n.biome !== null) continue;
-      if (Math.random() < 0.6 * BIOME_MOD[current.biome!]) {
-        n.biome = current.biome;
-        queue.push(n);
-      }
-    }
-  }
+  const pulse = Math.sin(blinkTime * 3);
 
-  // wave 3: final assign for those that were left out
-  for (const hex of hexes) {
-    if (hex.biome !== null) continue;
+  const alpha = 0.15 + 0.15 * (0.5 + 0.5 * pulse);
+  const scale = 1 + 0.05 * Math.sin(blinkTime * 3);
 
-    const neighbors = findNeighbors(hex, hexes).filter((n) => n.biome !== null);
+  ctx.globalAlpha = alpha;
+  ctx.scale(scale, scale);
 
-    if (neighbors.length === 0) {
-      hex.biome = "plains";
-      continue;
-    }
+  ctx.fillStyle = "rgba(240,240,240,1)";
+  ctx.strokeStyle = "#FFFFFF";
 
-    // count how many biomes are around this tile
-    const counts: Record<Biome, number> = {
-      desert: 0,
-      plains: 0,
-      forest: 0,
-      mountains: 0,
-    };
-
-    for (const n of neighbors) {
-      counts[n.biome!] += 1;
-    }
-
-    // превращаем в "мешок шансов"
-    const pool: Biome[] = [];
-
-    for (const biome in counts) {
-      for (let i = 0; i < counts[biome as Biome]; i++) {
-        pool.push(biome as Biome);
-      }
-    }
-
-    // guaranteed chosen
-    const chosen = pool[Math.floor(Math.random() * pool.length)];
-
-    hex.biome = chosen;
-  }
-  return hexes;
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }
-function findNeighbors(hex: Hex, hexes: Hex[]) {
-  const neighbors = [];
 
-  for (const dir of HEX_DIRECTIONS) {
-    const q = hex.q + dir.dq;
-    const r = hex.r + dir.dr;
-
-    const neighbor = hexes.find((n) => n.q === q && n.r === r);
-    if (neighbor) neighbors.push(neighbor);
-  }
-
-  return neighbors;
-}
 function hexToPixel(q: number, r: number) {
   const x = HEX_SIZE * Math.sqrt(3) * (q + r / 2);
   const y = ((HEX_SIZE * 3) / 2) * r;
 
   return { x, y };
 }
-export function pixelToHex({ x, y }: { x: number; y: number }) {
+export function pixelToHex({ x, y, mapHexes }: { x: number; y: number; mapHexes: Hex[] }) {
   const r = y / ((HEX_SIZE * 3) / 2);
   const q = x / (HEX_SIZE * Math.sqrt(3)) - r / 2;
 
@@ -259,12 +203,30 @@ export function pixelToHex({ x, y }: { x: number; y: number }) {
 
 export function renderMap(
   ctx: CanvasRenderingContext2D,
+  clickCtx: CanvasRenderingContext2D,
   mapCenterX: number,
   mapCenterY: number,
-  selectedHexId: number | null
+  selectedHexId: number | null,
+  blinkTime: number,
+  mapHexes: Hex[],
+  nations: Nation[]
 ) {
-  console.log(mapHexes);
+  mapHexes.map((hex) => {
+    const { x, y } = hexToPixel(hex.q, hex.r);
 
+    drawPolygon({
+      ctx: ctx,
+      centerX: mapCenterX + x,
+      centerY: mapCenterY + y,
+      radius: HEX_SIZE - 1,
+      rotation: Math.PI / 6,
+      biome: hex.biome,
+      id: hex.id,
+      nations: nations,
+    });
+  });
+
+  // draw invisible click map
   mapHexes.map((hex) => {
     const { x, y } = hexToPixel(hex.q, hex.r);
     let isSelected: boolean = false;
@@ -273,15 +235,31 @@ export function renderMap(
       isSelected = hex.id === selectedHexId;
     }
 
-    drawPolygon({
-      ctx: ctx,
+    drawClickPolygon({
+      ctx: clickCtx,
       centerX: mapCenterX + x,
       centerY: mapCenterY + y,
-      sides: 6,
       radius: HEX_SIZE - 1,
       rotation: Math.PI / 6,
-      biome: hex.biome,
       isSelected: isSelected,
+      blinkTime: blinkTime,
     });
   });
+}
+
+export function getNationName({ id, nationsObject }: { id: string; nationsObject: object }) {
+  if (nationsObject) {
+    const entry = Object.entries(nationsObject).find(([_, value]) => value === id);
+
+    const key = entry?.[0] ? entry?.[0] : "tribes";
+    return key;
+  }
+}
+
+export function popConverter(population: number) {
+  if (population >= 1000000) {
+    return `${(population / 1000000).toFixed(1)}M`;
+  } else if (population >= 1000) {
+    return `${(population / 1000).toFixed(1)}k`;
+  }
 }

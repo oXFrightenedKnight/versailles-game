@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Providers from "@/components/Providers";
+import ClerkClientProvider from "@/components/ClerkClientProvider";
+import localFont from "next/font/local";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -10,6 +13,12 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const trajanPro = localFont({
+  src: "./fonts/TrajanPro-Bold.woff2",
+  variable: "--font-trajanpro",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -22,13 +31,21 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const PUBLISHABLE_KEY = process.env.NEXT_CLERK_PUBLISHABLE_KEY;
+
+  if (!PUBLISHABLE_KEY) {
+    throw new Error("Add your Clerk Publishable Key to the .env file");
+  }
+
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
-    </html>
+    <ClerkClientProvider publishableKey={PUBLISHABLE_KEY}>
+      <html lang="en">
+        <body
+          className={`${geistSans.variable} ${geistMono.variable} ${trajanPro.variable} font-sans antialiased`}
+        >
+          <Providers>{children}</Providers>
+        </body>
+      </html>
+    </ClerkClientProvider>
   );
 }
